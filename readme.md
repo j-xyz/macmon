@@ -21,7 +21,7 @@
 - ⚡ Real-time CPU / GPU / ANE power usage
 - 📊 CPU frequency-scaled and active ratios per cluster
 - 💾 RAM / Swap usage
-- 📈 Historical charts with average and max values
+- 📈 Historical charts for CPU / GPU / RAM usage and CPU temperature
 - 🌡️ Average CPU / GPU temperature
 - 📋 Process list with per-process CPU, memory, power and GPU usage
 - 🎨 Follows your terminal's color scheme
@@ -79,7 +79,11 @@ Options:
 
 ### Interactive mode
 
-Run `macmon` without a subcommand to open the terminal UI: the metric boxes on top and the process list below. Press `?` in the app to see the keys.
+Run `macmon` without a subcommand to open the terminal UI: CPU clusters, GPU and RAM usage above a full-width CPU temperature history, with the process list below. Press `?` in the app to see the keys.
+
+The temperature title shows the latest measured CPU sensor average, rounded to whole degrees Celsius. Its graph uses a fixed 0–150°C display range (not a thermal safety threshold), with colors from cool at 30°C to hot at 100°C. One column represents one metrics update, newest at the right, with up to 1,024 samples retained; changing the update interval changes the time represented by new columns. Missing readings leave gaps and show `N/A`, while startup shows `collecting…`. Fan RPM appears on the temperature box when available. Temperature remains a history graph when `v` switches utilization boxes to gauges.
+
+System/component watt boxes are omitted from this view. Power and GPU temperature remain available through JSON, Prometheus and the library; the process list retains its POWER column.
 
 Press `/` to filter the process list. A filter is a comma-separated list of terms, each matched case-insensitively against the process name or pid: `safari, cargo` shows processes matching any term, and a term starting with `!` hides its matches (`chrome, !helper`). `Enter` keeps the filter, `Esc` clears it.
 

@@ -48,6 +48,8 @@ const HELP: &[Row] = &[
   Term("CPU%", "100% is one fully busy core"),
   Term("TIME", "CPU time used since the process started"),
   Term("freq", "usage weighted by frequency; raw: share of time busy"),
+  Term("Temperature", "CPU sensor average; graph 0–150°C, missing samples are gaps"),
+  Term("History", "one column per update; newest at right, up to 1024 samples"),
   Term("POWER -", "not available for other users' processes"),
 ];
 

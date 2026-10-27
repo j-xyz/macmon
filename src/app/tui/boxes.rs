@@ -1,6 +1,6 @@
-//! Metrics box (the metric boxes of the original macmon: CPU clusters, GPU, RAM, CPU / GPU / ANE
-//! / total power) and the box frame it shares with the process list: rounded borders, titles fitted
-//! on the top border, a text and the key hints on the bottom border.
+//! Metrics box (CPU clusters, GPU, RAM and a full-width CPU temperature graph) and the box frame it
+//! shares with the process list: rounded borders, titles fitted on the top border, a text and the
+//! key hints on the bottom border.
 
 use std::ops::Range;
 
@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, BorderType, Scrollbar, ScrollbarOrientation, Scrol
 use super::App;
 use super::layout::{LayoutPlan, Metric};
 use super::proc_view::{ELLIPSIS, head};
-use super::store::{ClusterStore, FreqStore, PowerStore, ratio};
+use super::store::{ClusterStore, FreqStore, ratio};
 use super::theme::{self, dim, faint, gradient, heading, text};
 use super::widgets::{Gauge, Graph};
 use crate::config::{RatioMode, TUI_MAX_MS, ViewType};
@@ -316,9 +316,8 @@ enum Scale {
   /// A load (CPU cluster, GPU, RAM): the graph is scaled to `max` and colored by load, and `v`
   /// switches it to a gauge of the current `load` (`0.0..=1.0`).
   Load { max: u64, load: f64 },
-  /// Power: the graph is scaled to its largest visible sample, in the low load color, as in the
-  /// original; no gauge.
-  Power,
+  /// CPU temperature: 0–150°C height, 30–100°C color range, always a history graph.
+  Temperature,
 }
 
 /// Titles and graph of one metric box.
@@ -374,11 +373,13 @@ impl App {
           f.render_widget(Gauge::new(load), inner)
         }
         Scale::Load { max, .. } => f.render_widget(graph.max(max), inner),
-        Scale::Power => f.render_widget(graph.color(gradient(0.0)), inner),
+        Scale::Temperature => {
+          f.render_widget(graph.max(150_000).color_range(30_000, 100_000), inner)
+        }
       }
 
-      // the fans (`1200 rpm`) right on the bottom border of the total power box
-      if kind == Metric::TotalPower && !fans.is_empty() && r.height >= 2 {
+      // The fans (`1200 rpm`) right on the temperature box bottom border.
+      if kind == Metric::CpuTemp && !fans.is_empty() && r.height >= 2 {
         render_bottom_border(f, r, vec![vec![text(fans.clone())]], |_| vec![]);
       }
     }
@@ -439,10 +440,7 @@ impl App {
       }
       Metric::Gpu => self.freq_box("GPU".to_string(), &self.igpu_freq),
       Metric::Ram => self.ram_box(),
-      Metric::CpuPower => self.power_box("CPU", &self.cpu_power, self.cpu_temp.last()),
-      Metric::GpuPower => self.power_box("GPU", &self.gpu_power, self.gpu_temp.last()),
-      Metric::AnePower => self.power_box("ANE", &self.ane_power, None),
-      Metric::TotalPower => self.total_power_box(),
+      Metric::CpuTemp => self.temperature_box(),
     }
   }
 
@@ -494,42 +492,16 @@ impl App {
     MetricBox { titles, data: &mem.items, scale: Scale::Load { max: mem.ram_total, load } }
   }
 
-  /// `CPU 4.50W (3.10, 8.20)` (current, average, maximum; original format), or `CPU 4.50W` when
-  /// that doesn't fit, with the temperature (`45°C`) on the right when the sensor exists, over the
-  /// power history in the low load color, scaled to its largest visible sample. Always a graph,
-  /// as in the original.
-  fn power_box<'a>(
-    &self,
-    label: &'static str,
-    store: &'a PowerStore,
-    temp: Option<f32>,
-  ) -> MetricBox<'a> {
-    let short = vec![heading(label), text(format!(" {:.2}W", store.top_value))];
-    let mut full = short.clone();
-    full.push(dim(format!(" ({:.2}, {:.2})", store.avg_value, store.max_value)));
-
-    let titles = [full, short].map(|left| {
-      let titles = Titles::new(left);
-      match temp {
-        Some(temp) => {
-          titles.right(Span::styled(format!("{temp:.0}°C"), gradient(temp_ratio(temp))))
-        }
-        None => titles,
-      }
-    });
-
-    MetricBox { titles: titles.into(), data: &store.items, scale: Scale::Power }
-  }
-
-  /// `Total 12.00W (12.00, 12.00)`, the whole system, or `Power 6.60W (6.60, 6.60)`, CPU + GPU +
-  /// ANE, without the system power sensor. The fans go on its bottom border (`render_metrics_box`).
-  fn total_power_box(&self) -> MetricBox<'_> {
-    // the newest sample, not the smoothed `top_value`, so the box switches as soon as it reads 0
-    if self.sys_power.items.first().is_some_and(|&mw| mw > 0) {
-      self.power_box("Total", &self.sys_power, None)
-    } else {
-      self.power_box("Power", &self.all_power, None)
-    }
+  /// Current measured temperature over its history, without estimates for missing samples.
+  fn temperature_box(&self) -> MetricBox<'_> {
+    let value = match self.cpu_temp.last() {
+      Some(temp) => Span::styled(format!("{temp:.0}°C"), gradient(temp_ratio(temp))),
+      None if self.cpu_temp.items.is_empty() => dim("collecting…"),
+      None => dim("N/A"),
+    };
+    let titles = ["CPU Temperature", "Temp"]
+      .map(|label| Titles::new(vec![heading(label), text(" "), value.clone()]));
+    MetricBox { titles: titles.into(), data: &self.cpu_temp.items, scale: Scale::Temperature }
   }
 }
 
