@@ -1,3 +1,5 @@
+Done: 2026-10-26, PR #1
+
 # CPU temperature history in place of the power row
 
 ## Behavior
@@ -30,3 +32,15 @@
 - [x] Add focused failing tests for the approved behavior.
 - [x] Implement the temperature row and update user documentation and help.
 - [x] Run required checks and inspect the running TUI.
+
+## Result
+
+The component/system watt row is replaced by a full-width measured CPU temperature graph.
+This prioritizes the owner's thermal monitoring over watt readings while preserving room for
+the utilization boxes and process list. Missing samples remain gaps; the fixed scale makes
+temperature heights comparable as the visible history changes. Power exports remain intact.
+
+The regression tests failed before implementation. `make check` and all 193 tests pass;
+the TUI was inspected on an Apple M4 at 80×24, 110×32 and 200×50, and two `pipe` samples
+confirmed temperature and power exports. VM, missing-reading and fan scenarios use fixtures.
+Independent Codex review found no actionable regressions. Production TUI code: -102 lines.
