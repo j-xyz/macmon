@@ -106,6 +106,10 @@ POWER does today.
       already sampled, and sort by it. Decision point before the plan: a new column or a switch
       of TIME between "total" and "recent", and the window length.
 
+- [x] **20. CPU temperature history.** Replace the component/total power row in the TUI with a
+      full-width measured CPU temperature graph, retain fan RPM, and show gaps for missing data.
+      Plan: [docs/plans/completed/20261026-cpu-temperature.md](plans/completed/20261026-cpu-temperature.md).
+
 Order for 0.11: 10, then 5 (decide which columns fit 80 cells; 6 only if too many), the second
 PR of 7, the third PR of 12. Items 11 and 4 need their decision first. Items 10, 12 and 13 are
 small and self-contained, good for an outside contributor.

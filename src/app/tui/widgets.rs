@@ -7,7 +7,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::widgets::Widget;
 
 use super::theme::gradient;
@@ -51,18 +50,18 @@ impl Widget for Gauge {
 /// History graph for newest-first samples over its whole area, right-aligned (newest sample on
 /// the right): one solid bar per column, growing from the bottom row up in eighths of a row
 /// (`▁`…`█`; blank / `▄` / `█` with `three_levels`), each colored by its own value on the load
-/// gradient, or all in one color. Zero values leave the column blank.
+/// gradient, or a separate value range. Zero values leave the column blank.
 pub(super) struct Graph<'a> {
   data: &'a [u64],
   max: Option<u64>,
-  color: Option<Color>,
+  color_range: Option<(u64, u64)>,
   three_levels: bool,
 }
 
 impl<'a> Graph<'a> {
   /// Graph scaled to its largest visible sample, each bar in its load color.
   pub(super) fn new(data: &'a [u64]) -> Self {
-    Self { data, max: None, color: None, three_levels: false }
+    Self { data, max: None, color_range: None, three_levels: false }
   }
 
   /// Bars in three levels (blank, `▄`, `█`) instead of eighths, for Apple Terminal, which draws
@@ -78,9 +77,9 @@ impl<'a> Graph<'a> {
     self
   }
 
-  /// Draws every bar in `color` instead of its load color.
-  pub(super) fn color(mut self, color: Color) -> Self {
-    self.color = Some(color);
+  /// Color range independent of graph height, e.g. 30–100°C for temperature.
+  pub(super) fn color_range(mut self, min: u64, max: u64) -> Self {
+    self.color_range = Some((min, max));
     self
   }
 }
@@ -97,7 +96,8 @@ impl Widget for Graph<'_> {
     let levels = u64::from(area.height) * BAR_LEVELS;
     for (x, &value) in (area.left()..area.right()).rev().zip(visible) {
       let mut level = bar_level(value, max, levels);
-      let color = self.color.unwrap_or_else(|| gradient(value as f64 / max as f64));
+      let (low, high) = self.color_range.unwrap_or((0, max));
+      let color = gradient((value as f64 - low as f64) / high.saturating_sub(low).max(1) as f64);
       for y in (area.top()..area.bottom()).rev() {
         if level == 0 {
           break;
@@ -145,7 +145,6 @@ mod tests {
   use ratatui::widgets::Widget;
 
   use super::{Gauge, Graph};
-  use crate::tui::theme::gradient;
 
   fn draw(widget: impl Widget, width: u16, height: u16) -> Buffer {
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -175,7 +174,7 @@ mod tests {
   }
 
   #[test]
-  fn graph_colors_each_column_or_all_in_one_color() {
+  fn graph_colors_each_column_by_load_or_temperature() {
     // the terminal's green / yellow / red, by each column's own value
     let buf = draw(Graph::new(&[90, 50, 10]).max(100), 3, 4);
     for (x, color) in [(0, Color::Green), (1, Color::Yellow), (2, Color::Red)] {
@@ -184,13 +183,31 @@ mod tests {
       }
     }
 
-    // power graphs: every bar in one color, the largest one too
-    let low = gradient(0.0);
-    let buf = draw(Graph::new(&[4000, 2000, 0, 200]).color(low), 4, 2);
-    assert_eq!(rows(&buf), ["   █", "▁ ██"]);
-    for (x, y) in [(0, 1), (2, 1), (3, 1), (3, 0)] {
-      assert_eq!(buf[(x, y)].fg, low, "{x}, {y}");
+    // temperature bars: the 30–100°C colors are independent of the 0–150°C height.
+    let buf = draw(
+      Graph::new(&[100_000, 65_000, 0, 30_000]).max(150_000).color_range(30_000, 100_000),
+      4,
+      2,
+    );
+    assert_eq!(rows(&buf), ["   ▃", "▄ ▇█"]);
+    for (x, color) in [(0, Color::Green), (2, Color::Yellow), (3, Color::Red)] {
+      assert_eq!(buf[(x, 1)].fg, color);
     }
+  }
+
+  #[test]
+  fn fixed_temperature_scale_does_not_change_with_visible_history() {
+    let temps = [120_000, 60_000, 150_000];
+    let narrow = draw(Graph::new(&temps).max(150_000), 2, 5);
+    let wide = draw(Graph::new(&temps).max(150_000), 3, 5);
+    for y in 0..5 {
+      for x in 0..2 {
+        assert_eq!(narrow[(x, y)], wide[(x + 1, y)]);
+      }
+    }
+    // 120°C is higher than 60°C and still below the 150°C display ceiling.
+    assert_eq!(rows(&narrow), ["  ", " █", " █", "██", "██"]);
+    assert_eq!(rows(&wide)[0], "█  ");
   }
 
   #[test]

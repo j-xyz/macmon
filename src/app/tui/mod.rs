@@ -28,7 +28,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::{ExecutableCommand, cursor, terminal};
 use ratatui::prelude::*;
-use store::{CpuClusters, FanStore, FreqSample, FreqStore, MemoryStore, PowerStore, TempStore};
+use store::{CpuClusters, FanStore, FreqSample, FreqStore, MemoryStore, TempStore};
 
 use crate::config::{Config, TUI_MIN_MS};
 use crate::procs::{ProcInfo, ProcSampler};
@@ -283,14 +283,7 @@ pub struct App {
   soc: SocInfo,
   mem: MemoryStore,
 
-  cpu_power: PowerStore,
-  gpu_power: PowerStore,
-  ane_power: PowerStore,
-  all_power: PowerStore,
-  sys_power: PowerStore,
-
   cpu_temp: TempStore,
-  gpu_temp: TempStore,
   fans: FanStore,
 
   /// CPU clusters, lowest tier first (E / P on M1–M4, E / S on M5, P / S on M5 Pro/Max, E / P / S
@@ -328,18 +321,11 @@ impl App {
   }
 
   fn update_metrics(&mut self, data: Metrics) {
-    self.cpu_power.push(data.cpu_power as f64);
-    self.gpu_power.push(data.gpu_power as f64);
-    self.ane_power.push(data.ane_power as f64);
-    self.all_power.push(data.all_power as f64);
-    self.sys_power.push(data.sys_power as f64);
-
     self.clusters.push(&data);
     let igpu = FreqSample::new(data.gpu_freq_mhz, data.gpu_scaled_ratio, data.gpu_active_ratio);
     self.igpu_freq.push(igpu);
 
     self.cpu_temp.push(data.temp.cpu_temp_avg);
-    self.gpu_temp.push(data.temp.gpu_temp_avg);
     self.fans.push(data.fans);
 
     self.mem.push(data.memory);
@@ -511,7 +497,7 @@ impl App {
   /// Screen layout for the current settings and metrics.
   fn layout(&self, area: Rect) -> LayoutPlan {
     let (procs, clusters) = (self.cfg.show_procs, self.clusters.items.len());
-    compute_layout(area, procs, clusters, !self.soc.vm)
+    compute_layout(area, procs, clusters)
   }
 
   /// Layout of a frame for the window `area`, with the state that follows the window updated
@@ -1201,10 +1187,11 @@ mod tests {
   #[test]
   fn renders_every_box_at_any_size() {
     use Metric::*;
-    let every_box = [Cluster(0), Cluster(1), Gpu, Ram, CpuPower, GpuPower, AnePower, TotalPower];
+    let every_box = [Cluster(0), Cluster(1), Gpu, Ram, CpuTemp];
     let sizes = [
       (400, 120),
       (200, 50),
+      (110, 32),
       (80, 24),
       (60, 15),
       (60, 12),
@@ -1248,15 +1235,12 @@ mod tests {
 
   /// Full box titles of `test_metrics`: the original format without the RAM total and without
   /// alignment padding.
-  const TITLES: [&str; 8] = [
+  const TITLES: [&str; 5] = [
     "E-CPU 42% @ 1800 MHz",
     "P-CPU 77% @ 3200 MHz",
     "GPU 23% @ 1400 MHz",
     "RAM 20.00 GB (55.6%) · SWAP 1.00 / 2.0 GB",
-    "CPU 4.50W (4.50, 4.50)",
-    "GPU 2.00W (2.00, 2.00)",
-    "ANE 0.10W (0.10, 0.10)",
-    "Total 12.00W (12.00, 12.00)",
+    "CPU Temperature 45°C",
   ];
 
   /// Top border of the metric box `metric` in a rendered frame.
@@ -1324,10 +1308,19 @@ mod tests {
     }
     assert!(!screen.contains("MHz") && !screen.contains("_-CPU"));
 
-    // no power row: CPU, GPU and RAM take the whole metrics box, the process box stays
+    // The temperature row stays in a VM, with no reading; the process box stays.
     let boxes = app.layout(buf.area).boxes;
     let rows = boxes.iter().map(|(m, r)| (*m, r.y, r.height)).collect::<Vec<_>>();
-    assert_eq!(rows, [(Metric::Cluster(0), 1, 18), (Metric::Gpu, 1, 18), (Metric::Ram, 1, 18)]);
+    assert_eq!(
+      rows,
+      [
+        (Metric::Cluster(0), 1, 9),
+        (Metric::Gpu, 1, 9),
+        (Metric::Ram, 1, 9),
+        (Metric::CpuTemp, 10, 9)
+      ]
+    );
+    assert!(screen.contains("CPU Temperature N/A"));
     assert!(!screen.contains("0.00W") && !screen.contains("ANE"), "{screen}");
     assert!(proc_row(&buf, 0).starts_with("╭─ proc 3 "), "{}", proc_row(&buf, 0));
     // POWER reads `-` for every process, without the note on own processes
@@ -1339,9 +1332,9 @@ mod tests {
   }
 
   #[test]
-  fn only_a_vm_drops_the_power_row_and_process_power() {
+  fn only_a_vm_drops_process_power_while_temperature_stays() {
     // processes sampled before the first metrics sample: the chip already tells a VM
-    for (vm, boxes, power, note) in [(false, 8, "1.50W", true), (true, 4, "-", false)] {
+    for (vm, boxes, power, note) in [(false, 5, "1.50W", true), (true, 5, "-", false)] {
       let soc = SocInfo { vm, ..test_soc() };
       let app = &mut with_procs(App::from_parts(soc, Config::default()), varied_procs());
       let buf = render_buffer(app, 200, 50);
@@ -1364,17 +1357,13 @@ mod tests {
     let version = format!("─ macmon v{} ─╮", env!("CARGO_PKG_VERSION"));
     let top = row(&buf, 0);
     assert!(top.starts_with("╭─ Apple M3 Pro (6E+6P+18GPU 36GB) ─") && top.ends_with(&version));
-    // whole-degree temperatures right on the CPU / GPU power boxes, none for ANE
-    assert!(box_top(&app, &buf, Metric::CpuPower).ends_with("─ 45°C ─╮"));
-    assert!(box_top(&app, &buf, Metric::GpuPower).ends_with("─ 40°C ─╮"));
-    assert!(box_top(&app, &buf, Metric::AnePower).ends_with("───╮"));
-    // nothing right on the total power box; no summary on the bottom border of the metrics box
-    assert!(box_top(&app, &buf, Metric::TotalPower).ends_with("───╮"));
+    assert!(box_top(&app, &buf, Metric::CpuTemp).starts_with("╭─ CPU Temperature 45°C ─"));
+    // no summary on the bottom border of the metrics box
     assert_eq!(row(&buf, PROC_Y - 1), format!("╰{}╯", "─".repeat(198)));
   }
 
   #[test]
-  fn fans_on_the_bottom_border_of_the_total_power_box() {
+  fn fans_on_the_bottom_border_of_the_temperature_box() {
     let cases: [(&[u32], &str); 3] = [
       (&[1200], "─ 1200 rpm ─╯"),
       (&[1200, 1300], "─ 1200/1300 rpm ─╯"),
@@ -1384,28 +1373,27 @@ mod tests {
       let fan = |&rpm: &u32| FanMetric { name: "fan".to_string(), rpm, max_rpm: None };
       let mut app = test_app_with(|m| m.fans = rpms.iter().map(fan).collect());
       let buf = render_buffer(&mut app, 200, 50);
-      let bottom = box_row(&app, &buf, Metric::TotalPower, true);
+      let bottom = box_row(&app, &buf, Metric::CpuTemp, true);
       assert!(bottom.starts_with("╰───") && bottom.ends_with(end), "{bottom}");
     }
   }
 
   #[test]
-  fn total_power_falls_back_to_the_soc_sum_without_the_system_sensor() {
-    // without the system power sensor and fans: CPU + GPU + ANE, nothing on the right
+  fn temperature_does_not_depend_on_the_system_power_sensor() {
     let mut app = test_app_with(|m| {
       m.sys_power = 0.0;
       m.fans.clear();
     });
     let buf = render_buffer(&mut app, 200, 50);
-    let top = box_top(&app, &buf, Metric::TotalPower);
-    assert!(top.starts_with("╭─ Power 6.60W (6.60, 6.60) ───") && top.ends_with("───╮"), "{top}");
-
-    // a sensor that stops reading falls back with its first zero sample
-    let mut app = test_app();
+    let top = box_top(&app, &buf, Metric::CpuTemp);
+    assert!(top.starts_with("╭─ CPU Temperature 45°C ─"), "{top}");
     app.update_metrics(Metrics { sys_power: 0.0, ..test_metrics() });
     let buf = render_buffer(&mut app, 200, 50);
-    let top = box_top(&app, &buf, Metric::TotalPower);
-    assert!(top.starts_with("╭─ Power 6.60W (6.60, 6.60) ───"), "{top}");
+    assert!(box_top(&app, &buf, Metric::CpuTemp).starts_with("╭─ CPU Temperature 45°C ─"));
+    let metrics_area = app.layout(buf.area).top.unwrap();
+    for y in metrics_area.top()..metrics_area.bottom() {
+      assert!(!row(&buf, y).contains("W ("), "watt box remains");
+    }
   }
 
   #[test]
@@ -1846,5 +1834,80 @@ mod tests {
     finish_sample();
     take_event(&mut app);
     assert_eq!(app.proc_view.procs(), Some(test_procs().as_slice()));
+  }
+  #[test]
+  fn temperature_replaces_watts_with_a_full_width_history_row() {
+    for (width, height) in [(80, 24), (110, 32), (200, 50)] {
+      for vm in [false, true] {
+        let mut app = test_app();
+        app.soc.vm = vm;
+        let buf = render_buffer(&mut app, width, height);
+        let plan = app.layout(buf.area);
+        assert_eq!(plan.boxes.len(), 5);
+        let (_, temp) = plan.boxes.last().unwrap();
+        assert_eq!((temp.x, temp.width), (1, width - 2));
+        assert!(screen_text(&buf).contains("CPU Temperature 45°C"));
+      }
+    }
+  }
+
+  #[test]
+  fn temperature_history_stays_a_graph_and_keeps_missing_sample_positions() {
+    let mut app = App::from_parts(test_soc(), Config::default());
+    let initial = render_to_string(&mut app, 80, 24);
+    assert!(initial.contains("CPU Temperature collecting…"));
+    for temp in [Some(40.25), Some(60.5), None, Some(50.75)] {
+      let mut metrics = test_metrics();
+      metrics.temp.cpu_temp_avg = temp;
+      app.update_metrics(metrics);
+    }
+    let mut buf = render_buffer(&mut app, 80, 24);
+    assert!(screen_text(&buf).contains("CPU Temperature 51°C"));
+    let (_, area) = app.layout(buf.area).boxes.last().copied().unwrap();
+    let inner = area.inner(Margin::new(1, 1));
+    assert!((inner.top()..inner.bottom()).all(|y| buf[(inner.right() - 2, y)].symbol() == " "));
+    let snapshot = |buf: &Buffer| {
+      (inner.top()..inner.bottom())
+        .flat_map(|y| (inner.left()..inner.right()).map(move |x| buf[(x, y)].clone()))
+        .collect::<Vec<_>>()
+    };
+    let graph = snapshot(&buf);
+    assert!(graph.iter().any(|cell| cell.symbol() != " "));
+    app.cfg.view_type = ViewType::Gauge;
+    buf = render_buffer(&mut app, 80, 24);
+    assert_eq!(snapshot(&buf), graph);
+    let mut metrics = test_metrics();
+    metrics.temp.cpu_temp_avg = None;
+    app.update_metrics(metrics);
+    assert!(render_to_string(&mut app, 80, 24).contains("CPU Temperature N/A"));
+  }
+  #[test]
+  fn resizing_without_processes_reveals_retained_temperature_history() {
+    let mut app = App::from_parts(test_soc(), Config::default());
+    app.cfg.show_procs = false;
+    for i in 0..130 {
+      let mut metrics = test_metrics();
+      metrics.temp.cpu_temp_avg = Some(30.0 + (i % 70) as f32);
+      app.update_metrics(metrics);
+    }
+    let narrow = render_buffer(&mut app, 80, 24);
+    let narrow_area = app.layout(narrow.area).boxes.last().unwrap().1.inner(Margin::new(1, 1));
+    let wide = render_buffer(&mut app, 110, 24);
+    let plan = app.layout(wide.area);
+    assert_eq!(plan.proc, None);
+    let wide_area = plan.boxes.last().unwrap().1.inner(Margin::new(1, 1));
+    assert_eq!(app.cpu_temp.items.len(), 130);
+    assert_eq!(app.cpu_temp.last(), Some(89.0));
+    for y in narrow_area.top()..narrow_area.bottom() {
+      for offset in 0..narrow_area.width {
+        assert_eq!(
+          narrow[(narrow_area.right() - 1 - offset, y)],
+          wide[(wide_area.right() - 1 - offset, y)]
+        );
+      }
+    }
+    assert!(
+      (wide_area.top()..wide_area.bottom()).any(|y| wide[(wide_area.left(), y)].symbol() != " ")
+    );
   }
 }
